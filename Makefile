@@ -1,6 +1,6 @@
 CC = gcc
 
-CFLAGS = -Wall -Wextra -O3 -I.
+CFLAGS = -Wall -Wextra -O3 -I. -pthread
 
 DEPS = defs.h board.h logic.h ai.h bot_easy.h bot_medium.h bot_hard.h network.h
 
