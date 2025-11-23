@@ -240,7 +240,7 @@ static int solve_position(const Position *P) {
 
 
 
-int getHardMove(char **b, char botSym, char oppSym) {
+int getHardMove(char **b, char botSym) {
    
     if(!transTable) init_hard_bot();
 
