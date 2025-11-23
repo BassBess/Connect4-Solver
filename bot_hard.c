@@ -406,7 +406,21 @@ void init_hard_bot(void) {
     
     book_load("7x6.book");
 }
-
+void cleanup_hard_bot(void) {
+    if(transTable) {
+        free(transTable);
+        transTable = NULL;
+    }
+    
+    if(BOOK.keys) {
+        free(BOOK.keys);
+        free(BOOK.values);
+        BOOK.keys = NULL;
+        BOOK.values = NULL;
+    }
+    
+    pthread_mutex_destroy(&tt_mutex);
+}
 int getHardMove(char **b, char botSym) {
     if(!transTable) init_hard_bot();
 
