@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include "defs.h"      
 #include "bot_hard.h"
-
+#include <pthread.h>
 #define P_WIDTH 7
 #define P_HEIGHT 6
 #define MIN_SCORE -(P_WIDTH*P_HEIGHT)/2 + 3
@@ -46,6 +46,14 @@ static TTEntry* transTable = NULL;
 static int columnOrder[P_WIDTH];
 static unsigned long long nodeCount = 0;
 static OpeningBook BOOK = {NULL, NULL, 0, -1};
+static pthread_mutex_t tt_mutex;
+
+typedef struct {
+    Position position;
+    int column;
+    int score;
+} ThreadWork;
+
 
 static int popcount(bitboard_t m) {
     return __builtin_popcountll(m);
