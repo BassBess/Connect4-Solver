@@ -323,6 +323,6 @@ int main()
 
         freeBoard(board);
     }
-    
+     cleanup_hard_bot();
     return 0;
 }
