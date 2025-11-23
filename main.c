@@ -52,6 +52,7 @@ void setupPlayers(Player players[2], int *botMode, int *botDiff) {
 
 int main()
 {
+    init_hard_bot();
     srand(time(NULL));
     int playAgain = 1;
     
