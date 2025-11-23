@@ -6,7 +6,6 @@
 #include "defs.h"      
 #include "bot_hard.h"
 
-
 #define P_WIDTH 7
 #define P_HEIGHT 6
 #define MIN_SCORE -(P_WIDTH*P_HEIGHT)/2 + 3
@@ -39,7 +38,6 @@ typedef struct {
 static TTEntry* transTable = NULL;
 static int columnOrder[P_WIDTH];
 static unsigned long long nodeCount = 0;
-
 
 static int popcount(bitboard_t m) {
     return __builtin_popcountll(m);
@@ -122,9 +120,17 @@ static bitboard_t pos_possible_non_losing_moves(const Position *p) {
     return possible_mask & ~(opponent_win >> 1); 
 }
 
-static void tt_init() {
-    if(transTable) return;
+void init_hard_bot() {
+    if (transTable) return; 
+    
     transTable = (TTEntry*)calloc(TT_SIZE, sizeof(TTEntry));
+    if (!transTable) {
+        fprintf(stderr, "Fatal: Failed to allocate memory for Hard Bot.\n");
+        exit(1);
+    }
+    
+    for(int i = 0; i < P_WIDTH; i++) 
+        columnOrder[i] = P_WIDTH/2 + (1-2*(i%2))*(i+1)/2;
 }
 
 static void tt_put(uint64_t key, uint8_t val) {
@@ -139,11 +145,14 @@ static uint8_t tt_get(uint64_t key) {
     return 0;
 }
 
+
 static int negamax(const Position *P, int alpha, int beta) {
     nodeCount++;
+    
     bitboard_t possible = pos_possible_non_losing_moves(P);
-    if (possible == 0) return -(P_WIDTH * P_HEIGHT - P->moves) / 2;
-    if (P->moves >= P_WIDTH * P_HEIGHT - 2) return 0;
+    if (possible == 0) return -(P_WIDTH * P_HEIGHT - P->moves) / 2; 
+    
+    if (P->moves >= P_WIDTH * P_HEIGHT - 2) return 0; 
 
     int min = -(P_WIDTH * P_HEIGHT - 2 - P->moves) / 2;
     if (alpha < min) {
@@ -175,7 +184,9 @@ static int negamax(const Position *P, int alpha, int beta) {
         }
     }
 
-    MoveSorter moves; moves.size = 0;
+    MoveSorter moves; 
+    moves.size = 0;
+    
     for (int i = P_WIDTH - 1; i >= 0; i--) {
         int col = columnOrder[i];
         bitboard_t move = possible & column_mask(col);
@@ -190,16 +201,18 @@ static int negamax(const Position *P, int alpha, int beta) {
     }
 
     while (moves.size > 0) {
-        bitboard_t next_move = moves.entries[--moves.size].move;
+        bitboard_t next_move = (bitboard_t)moves.entries[--moves.size].move;
         Position P2 = *P;
         pos_play(&P2, next_move);
         int score = -negamax(&P2, -beta, -alpha);
+        
         if (score >= beta) {
             tt_put(key, score + MAX_SCORE - 2 * MIN_SCORE + 2);
             return score;
         }
         if (score > alpha) alpha = score;
     }
+    
     tt_put(key, alpha - MIN_SCORE + 1);
     return alpha;
 }
@@ -207,12 +220,15 @@ static int negamax(const Position *P, int alpha, int beta) {
 static int solve_position(const Position *P) {
     nodeCount = 0;
     if (pos_can_win_next(P)) return (P_WIDTH * P_HEIGHT + 1 - P->moves) / 2;
+    
     int min = -(P_WIDTH * P_HEIGHT - P->moves) / 2;
     int max = (P_WIDTH * P_HEIGHT + 1 - P->moves) / 2;
+    
     while (min < max) {
         int med = min + (max - min) / 2;
         if (med <= 0 && min / 2 < med) med = min / 2;
         else if (med >= 0 && max / 2 > med) med = max / 2;
+        
         int r = negamax(P, med, med + 1);
         if (r <= med) max = r;
         else min = r;
@@ -220,52 +236,54 @@ static int solve_position(const Position *P) {
     return min;
 }
 
+
+
+
+
 int getHardMove(char **b, char botSym, char oppSym) {
-  
-    if(!transTable) {
-        tt_init();
-        for(int i = 0; i < P_WIDTH; i++) 
-            columnOrder[i] = P_WIDTH/2 + (1-2*(i%2))*(i+1)/2;
-    }
+   
+    if(!transTable) init_hard_bot();
 
     Position p = {0, 0, 0};
+    
     for(int c = 0; c < P_WIDTH; c++) {
         for(int r = P_HEIGHT - 1; r >= 0; r--) {
-            
             if(b[r][c] != EMPTY) {
                 p.moves++;
-
+                
                 int bitRow = (P_HEIGHT - 1) - r; 
-                p.mask |= (1ULL << (bitRow + c * (P_HEIGHT + 1)));
+                int bitIdx = bitRow + c * (P_HEIGHT + 1);
+                
+                p.mask |= (1ULL << bitIdx);
                 if(b[r][c] == botSym) {
-                    p.current_position |= (1ULL << (bitRow + c * (P_HEIGHT + 1)));
+                    p.current_position |= (1ULL << bitIdx);
                 }
             }
         }
     }
-
     bitboard_t possible = (p.mask + get_bottom_mask()) & get_board_mask();
     for(int i=0; i<P_WIDTH; i++) {
         int col = columnOrder[i]; 
         bitboard_t move = (p.mask + bottom_mask_col(col)) & column_mask(col);
+        
         if((possible & column_mask(col)) && move) {
-             
              if(compute_winning_position(p.current_position, p.mask) & move) {
                  return col + 1; 
              }
         }
     }
+
     int bestCol = -1;
-    int bestScore = -9999;
+    int bestScore = -99999;
 
     for(int i = 0; i < P_WIDTH; i++) {
         int col = columnOrder[i]; 
         
         if((p.mask & top_mask_col(col)) == 0) {
             Position p2 = p;
-          
             bitboard_t move = (p2.mask + bottom_mask_col(col)) & column_mask(col);
-            pos_play(&p2, move);
+            
+            pos_play(&p2, move); 
   
             int score = -solve_position(&p2);
             
@@ -278,6 +296,7 @@ int getHardMove(char **b, char botSym, char oppSym) {
 
     if(bestCol == -1) {
         for(int c=0; c<P_WIDTH; c++) if(b[0][c] == EMPTY) return c+1;
+        return 1;
     }
 
     return bestCol + 1;
