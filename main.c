@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-
+#include "bot_hard.h"
 #include "defs.h"
 #include "board.h"
 #include "logic.h"
