@@ -421,6 +421,15 @@ void cleanup_hard_bot(void) {
     
     pthread_mutex_destroy(&tt_mutex);
 }
+void *evaluate_move_thread(void *arg) {
+    ThreadWork *work = (ThreadWork *)arg;
+    Position next_pos = work->position;
+    bitboard_t move = (next_pos.mask + bottom_mask_col(work->column)) & column_mask(work->column);
+    pos_play(&next_pos, move);
+    work->score = -solve_position(&next_pos);
+    
+    return NULL;
+}
 int getHardMove(char **b, char botSym) {
     if(!transTable) init_hard_bot();
 
