@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
-#include <assert.h>
+#include <stdbool.h>
 #include "defs.h"      
 #include "bot_hard.h"
 
@@ -34,10 +34,18 @@ typedef struct {
     MoveEntry entries[P_WIDTH];
     int size;
 } MoveSorter;
+// Opening Book
+typedef struct {
+    uint32_t *keys;
+    uint8_t *values;
+    size_t size;
+    int max_depth;
+} OpeningBook;
 
 static TTEntry* transTable = NULL;
 static int columnOrder[P_WIDTH];
 static unsigned long long nodeCount = 0;
+static OpeningBook BOOK = {NULL, NULL, 0, -1};
 
 static int popcount(bitboard_t m) {
     return __builtin_popcountll(m);
@@ -120,18 +128,156 @@ static bitboard_t pos_possible_non_losing_moves(const Position *p) {
     return possible_mask & ~(opponent_win >> 1); 
 }
 
-void init_hard_bot() {
-    if (transTable) return; 
-    
-    transTable = (TTEntry*)calloc(TT_SIZE, sizeof(TTEntry));
-    if (!transTable) {
-        fprintf(stderr, "Fatal: Failed to allocate memory for Hard Bot.\n");
-        exit(1);
+
+static void partial_key3(uint64_t *k, const Position *p, int col) {
+    bitboard_t pos = 1ULL << (col * (P_HEIGHT + 1));
+    while (pos & p->mask) {
+        *k *= 3;
+        if (pos & p->current_position) *k += 1;
+        else *k += 2;
+        pos <<= 1;
+    }
+    *k *= 3;
+}
+
+static uint64_t pos_key3(const Position *p) {
+    uint64_t key_forward = 0;
+    for (int i = 0; i < P_WIDTH; i++) {
+        partial_key3(&key_forward, p, i);
     }
     
-    for(int i = 0; i < P_WIDTH; i++) 
-        columnOrder[i] = P_WIDTH/2 + (1-2*(i%2))*(i+1)/2;
+    uint64_t key_reverse = 0;
+    for (int i = P_WIDTH - 1; i >= 0; i--) {
+        partial_key3(&key_reverse, p, i);
+    }
+    
+    return (key_forward < key_reverse ? key_forward : key_reverse) / 3;
 }
+
+static size_t find_next_prime(size_t n) {
+    while (1) {
+        bool is_prime = true;
+        if (n < 2) {
+            n = 2;
+            continue;
+        }
+        for (size_t i = 2; i * i <= n; i++) {
+            if (n % i == 0) {
+                is_prime = false;
+                break;
+            }
+        }
+        if (is_prime) return n;
+        n++;
+    }
+}
+
+static bool book_load(const char *filename) {
+    FILE *f = fopen(filename, "rb");
+    if (!f) {
+
+        return false;
+    }
+    
+    uint8_t width, height, depth, key_bytes, val_bytes, log_size;
+    
+    if (fread(&width, 1, 1, f) != 1 ||
+        fread(&height, 1, 1, f) != 1 ||
+        fread(&depth, 1, 1, f) != 1 ||
+        fread(&key_bytes, 1, 1, f) != 1 ||
+        fread(&val_bytes, 1, 1, f) != 1 ||
+        fread(&log_size, 1, 1, f) != 1) {
+        fclose(f);
+        return false;
+    }
+    
+    if (width != P_WIDTH || height != P_HEIGHT || val_bytes != 1) {
+        fclose(f);
+        return false;
+    }
+    
+    size_t size = find_next_prime(1ULL << log_size);
+    
+    BOOK.size = size;
+    BOOK.max_depth = depth;
+    BOOK.keys = malloc(size * sizeof(uint32_t));
+    BOOK.values = malloc(size * sizeof(uint8_t));
+    
+    if (!BOOK.keys || !BOOK.values) {
+        fclose(f);
+        return false;
+    }
+    
+    if (key_bytes == 4) {
+        if (fread(BOOK.keys, 4, size, f) != size) {
+            free(BOOK.keys);
+            free(BOOK.values);
+            BOOK.keys = NULL;
+            BOOK.values = NULL;
+            fclose(f);
+            return false;
+        }
+    } else if (key_bytes == 2) {
+        uint16_t *temp = malloc(size * sizeof(uint16_t));
+        if (!temp || fread(temp, 2, size, f) != size) {
+            free(temp);
+            free(BOOK.keys);
+            free(BOOK.values);
+            BOOK.keys = NULL;
+            BOOK.values = NULL;
+            fclose(f);
+            return false;
+        }
+        for (size_t i = 0; i < size; i++) {
+            BOOK.keys[i] = temp[i];
+        }
+        free(temp);
+    } else if (key_bytes == 1) {
+        uint8_t *temp = malloc(size * sizeof(uint8_t));
+        if (!temp || fread(temp, 1, size, f) != size) {
+            free(temp);
+            free(BOOK.keys);
+            free(BOOK.values);
+            BOOK.keys = NULL;
+            BOOK.values = NULL;
+            fclose(f);
+            return false;
+        }
+        for (size_t i = 0; i < size; i++) {
+            BOOK.keys[i] = temp[i];
+        }
+        free(temp);
+    }
+    
+    if (fread(BOOK.values, 1, size, f) != size) {
+        free(BOOK.keys);
+        free(BOOK.values);
+        BOOK.keys = NULL;
+        BOOK.values = NULL;
+        fclose(f);
+        return false;
+    }
+    
+    fclose(f);
+    fprintf(stderr, "[Bot] Loaded opening book: %zu positions up to depth %d\n", 
+            size, depth);
+    return true;
+}
+
+static int book_get(const Position *p) {
+    if (BOOK.keys == NULL || p->moves > BOOK.max_depth) {
+        return 0;
+    }
+    
+    uint64_t k = pos_key3(p);
+    size_t idx = k % BOOK.size;
+    
+    if (BOOK.keys[idx] == (k & 0xFF)) {
+        return BOOK.values[idx];
+    }
+    return 0;
+}
+
 
 static void tt_put(uint64_t key, uint8_t val) {
     int idx = key % TT_SIZE;
@@ -144,7 +290,6 @@ static uint8_t tt_get(uint64_t key) {
     if(transTable[idx].key == key) return transTable[idx].val;
     return 0;
 }
-
 
 static int negamax(const Position *P, int alpha, int beta) {
     nodeCount++;
@@ -182,6 +327,9 @@ static int negamax(const Position *P, int alpha, int beta) {
                 if (alpha >= beta) return beta;
             }
         }
+    }
+    if ((val = book_get(P))) {
+        return val + MIN_SCORE - 1;
     }
 
     MoveSorter moves; 
@@ -236,12 +384,22 @@ static int solve_position(const Position *P) {
     return min;
 }
 
-
-
-
+void init_hard_bot(void) {
+    if (transTable) return; 
+    
+    transTable = (TTEntry*)calloc(TT_SIZE, sizeof(TTEntry));
+    if (!transTable) {
+        fprintf(stderr, "Fatal: Failed to allocate memory for Hard Bot.\n");
+        exit(1);
+    }
+    
+    for(int i = 0; i < P_WIDTH; i++) 
+        columnOrder[i] = P_WIDTH/2 + (1-2*(i%2))*(i+1)/2;
+    
+    book_load("7x6.book");
+}
 
 int getHardMove(char **b, char botSym) {
-   
     if(!transTable) init_hard_bot();
 
     Position p = {0, 0, 0};
@@ -261,6 +419,7 @@ int getHardMove(char **b, char botSym) {
             }
         }
     }
+    
     bitboard_t possible = (p.mask + get_bottom_mask()) & get_board_mask();
     for(int i=0; i<P_WIDTH; i++) {
         int col = columnOrder[i]; 
@@ -284,7 +443,6 @@ int getHardMove(char **b, char botSym) {
             bitboard_t move = (p2.mask + bottom_mask_col(col)) & column_mask(col);
             
             pos_play(&p2, move); 
-  
             int score = -solve_position(&p2);
             
             if(score > bestScore) {
