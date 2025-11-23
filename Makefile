@@ -1,5 +1,7 @@
+
 CC = gcc
-CFLAGS = -Wall -Wextra -I.
+
+CFLAGS = -Wall -Wextra -O3 -I.
 
 DEPS = defs.h board.h logic.h ai.h bot_easy.h bot_medium.h bot_hard.h
 
@@ -12,4 +14,4 @@ connect4: $(OBJ)
 	$(CC) -o $@ $^ $(CFLAGS)
 
 clean:
-	rm -f *.o connect4
+	rm -f *.o connect4 connect4.exe
