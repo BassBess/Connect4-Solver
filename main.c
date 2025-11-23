@@ -53,6 +53,21 @@ int main() {
         int current = 0;
         int gameOver = 0;
 
+        int firstPlayer;
+        printf("\nWho should go first?\n");
+        printf("1 - %s (%c)\n", players[0].name, players[0].symbol);
+        printf("2 - %s (%c)\n", players[1].name, players[1].symbol);
+        printf("Enter choice (1 or 2): ");
+        
+        scanf("%d", &firstPlayer);
+        while (getchar() != '\n'); 
+
+        if (firstPlayer == 2) {
+            current = 1; 
+        } else {
+            current = 0;
+        }
+        
         printf("\nGame starting!\n");
         printBoard(board);
 
