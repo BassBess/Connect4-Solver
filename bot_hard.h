@@ -2,6 +2,5 @@
 #define BOT_HARD_H
 
 void init_hard_bot(); 
-int getHardMove(char **b, char botSym, char oppSym);
-
+int getHardMove(char **b, char botSym); 
 #endif
