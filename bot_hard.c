@@ -440,26 +440,36 @@ int getHardMove(char **b, char botSym) {
         }
     }
 
-    int bestCol = -1;
+   int bestCol = -1;
     int bestScore = -99999;
 
+    pthread_t threads[P_WIDTH];
+    ThreadWork work[P_WIDTH];
+    int validMoves = 0;
+
     for(int i = 0; i < P_WIDTH; i++) {
-        int col = columnOrder[i]; 
+        int col = columnOrder[i];
         
-        if((p.mask & top_mask_col(col)) == 0) {
-            Position p2 = p;
-            bitboard_t move = (p2.mask + bottom_mask_col(col)) & column_mask(col);
+        if((p.mask & top_mask_col(col)) == 0) {  
+            work[validMoves].position = p;
+            work[validMoves].column = col;
+            work[validMoves].score = -99999;
             
-            pos_play(&p2, move); 
-            int score = -solve_position(&p2);
-            
-            if(score > bestScore) {
-                bestScore = score;
-                bestCol = col;
-            }
+            pthread_create(&threads[validMoves], NULL, evaluate_move_thread, &work[validMoves]);
+            validMoves++;
         }
     }
 
+    for(int i = 0; i < validMoves; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    for(int i = 0; i < validMoves; i++) {
+        if(work[i].score > bestScore) {
+            bestScore = work[i].score;
+            bestCol = work[i].column;
+        }
+    }
     if(bestCol == -1) {
         for(int c=0; c<P_WIDTH; c++) if(b[0][c] == EMPTY) return c+1;
         return 1;
