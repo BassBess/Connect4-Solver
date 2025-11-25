@@ -11,7 +11,11 @@
 #define HEIGHT 6
 #define MIN_SCORE (-(WIDTH*HEIGHT)/2 + 3)
 #define MAX_SCORE ((WIDTH*HEIGHT+1)/2 - 3)
-#define TT_SIZE 8388617
+
+// OPTIMIZATION 1: Power of 2 size for fast bitwise access
+// 2^23 = 8,388,608 entries (approx 134 MB RAM)
+#define TT_SIZE (1 << 23)
+#define TT_MASK (TT_SIZE - 1)
 
 typedef uint64_t bitboard_t;
 
@@ -22,7 +26,7 @@ typedef struct {
 } Position;
 
 typedef struct {
-    uint32_t *keys;
+    uint64_t *keys; // FIX 1: Changed to 64-bit to prevent collisions
     uint8_t *values;
 } TranspositionTable;
 
@@ -49,7 +53,6 @@ static int column_order[WIDTH];
 static unsigned long long node_count = 0;
 static bitboard_t BOTTOM_MASK = 0;
 static bitboard_t BOARD_MASK = 0;
-
 
 static inline bitboard_t column_mask(int col) {
     return ((UINT64_C(1) << HEIGHT) - 1) << (col * (HEIGHT + 1));
@@ -150,7 +153,6 @@ static int move_score(const Position *p, bitboard_t move) {
     return popcount(compute_winning_position(p->current_position | move, p->mask));
 }
 
-
 static void partial_key3(uint64_t *k, const Position *p, int col) {
     bitboard_t pos = UINT64_C(1) << (col * (HEIGHT + 1));
     while (pos & p->mask) {
@@ -179,15 +181,9 @@ static uint64_t key3(const Position *p) {
 static size_t find_next_prime(size_t n) {
     while (1) {
         bool is_prime = true;
-        if (n < 2) {
-            n = 2;
-            continue;
-        }
+        if (n < 2) { n = 2; continue; }
         for (size_t i = 2; i * i <= n; i++) {
-            if (n % i == 0) {
-                is_prime = false;
-                break;
-            }
+            if (n % i == 0) { is_prime = false; break; }
         }
         if (is_prime) return n;
         n++;
@@ -200,25 +196,13 @@ static bool book_load(const char *filename) {
     
     uint8_t width, height, depth, key_bytes, val_bytes, log_size;
     
-    if (fread(&width, 1, 1, f) != 1 ||
-        fread(&height, 1, 1, f) != 1 ||
-        fread(&depth, 1, 1, f) != 1 ||
-        fread(&key_bytes, 1, 1, f) != 1 ||
-        fread(&val_bytes, 1, 1, f) != 1 ||
-        fread(&log_size, 1, 1, f) != 1) {
-        fclose(f);
-        return false;
+    if (fread(&width, 1, 1, f) != 1 || fread(&height, 1, 1, f) != 1 ||
+        fread(&depth, 1, 1, f) != 1 || fread(&key_bytes, 1, 1, f) != 1 ||
+        fread(&val_bytes, 1, 1, f) != 1 || fread(&log_size, 1, 1, f) != 1) {
+        fclose(f); return false;
     }
     
-    if (width != WIDTH || height != HEIGHT || val_bytes != 1) {
-        fclose(f);
-        return false;
-    }
-    
-    if (key_bytes != 1 && key_bytes != 2 && key_bytes != 4) {
-        fclose(f);
-        return false;
-    }
+    if (width != WIDTH || height != HEIGHT || val_bytes != 1) { fclose(f); return false; }
     
     size_t size = find_next_prime(1ULL << log_size);
     
@@ -227,95 +211,55 @@ static bool book_load(const char *filename) {
     BOOK.keys = malloc(size * sizeof(uint32_t));
     BOOK.values = malloc(size * sizeof(uint8_t));
     
-    if (!BOOK.keys || !BOOK.values) {
-        fclose(f);
-        return false;
-    }
+    if (!BOOK.keys || !BOOK.values) { fclose(f); return false; }
     
     if (key_bytes == 4) {
-        if (fread(BOOK.keys, 4, size, f) != size) {
-            free(BOOK.keys);
-            free(BOOK.values);
-            BOOK.keys = NULL;
-            BOOK.values = NULL;
-            fclose(f);
-            return false;
-        }
+        if (fread(BOOK.keys, 4, size, f) != size) goto cleanup;
     } else if (key_bytes == 2) {
         uint16_t *temp = malloc(size * sizeof(uint16_t));
-        if (!temp || fread(temp, 2, size, f) != size) {
-            free(temp);
-            free(BOOK.keys);
-            free(BOOK.values);
-            BOOK.keys = NULL;
-            BOOK.values = NULL;
-            fclose(f);
-            return false;
-        }
-        for (size_t i = 0; i < size; i++) {
-            BOOK.keys[i] = temp[i];
-        }
+        if (!temp || fread(temp, 2, size, f) != size) { free(temp); goto cleanup; }
+        for (size_t i = 0; i < size; i++) BOOK.keys[i] = temp[i];
         free(temp);
     } else {
         uint8_t *temp = malloc(size * sizeof(uint8_t));
-        if (!temp || fread(temp, 1, size, f) != size) {
-            free(temp);
-            free(BOOK.keys);
-            free(BOOK.values);
-            BOOK.keys = NULL;
-            BOOK.values = NULL;
-            fclose(f);
-            return false;
-        }
-        for (size_t i = 0; i < size; i++) {
-            BOOK.keys[i] = temp[i];
-        }
+        if (!temp || fread(temp, 1, size, f) != size) { free(temp); goto cleanup; }
+        for (size_t i = 0; i < size; i++) BOOK.keys[i] = temp[i];
         free(temp);
     }
     
-    if (fread(BOOK.values, 1, size, f) != size) {
-        free(BOOK.keys);
-        free(BOOK.values);
-        BOOK.keys = NULL;
-        BOOK.values = NULL;
-        fclose(f);
-        return false;
-    }
+    if (fread(BOOK.values, 1, size, f) != size) goto cleanup;
     
     fclose(f);
     return true;
+
+cleanup:
+    free(BOOK.keys); free(BOOK.values);
+    BOOK.keys = NULL; BOOK.values = NULL;
+    fclose(f);
+    return false;
 }
 
 static int book_get(const Position *p) {
-    if (BOOK.keys == NULL || (int)p->moves > BOOK.max_depth) {
-        return 0;
-    }
-    
+    if (BOOK.keys == NULL || (int)p->moves > BOOK.max_depth) return 0;
     uint64_t k = key3(p);
     size_t idx = k % BOOK.size;
-    
-    if (BOOK.keys[idx] == (k & 0xFF)) {
-        return BOOK.values[idx];
-    }
+    if (BOOK.keys[idx] == (k & 0xFF)) return BOOK.values[idx];
     return 0;
 }
 
-
+// OPTIMIZATION 2: Fast Bitwise Hash Table Access
 static void tt_put(uint64_t k, uint8_t val) {
-    size_t idx = k % TT_SIZE;
-    TT.keys[idx] = (uint32_t)k;
+    size_t idx = k & TT_MASK; // Use bitwise AND instead of modulo
+    TT.keys[idx] = k;         // Store full 64-bit key
     TT.values[idx] = val;
 }
 
 static uint8_t tt_get(uint64_t k) {
-    size_t idx = k % TT_SIZE;
-    return (TT.keys[idx] == (uint32_t)k) ? TT.values[idx] : 0;
+    size_t idx = k & TT_MASK;
+    return (TT.keys[idx] == k) ? TT.values[idx] : 0; // Compare full key
 }
 
-
-static void ms_init(MoveSorter *ms) {
-    ms->size = 0;
-}
+static void ms_init(MoveSorter *ms) { ms->size = 0; }
 
 static void ms_add(MoveSorter *ms, bitboard_t move, int score) {
     int pos = ms->size++;
@@ -334,20 +278,14 @@ static bitboard_t ms_get_next(MoveSorter *ms) {
 static int negamax(const Position *P, int alpha, int beta);
 
 static int solve(const Position *P) {
-    if (can_win_next(P)) {
-        return (WIDTH * HEIGHT + 1 - (int)P->moves) / 2;
-    }
-    
+    if (can_win_next(P)) return (WIDTH * HEIGHT + 1 - (int)P->moves) / 2;
     int min = -(WIDTH * HEIGHT - (int)P->moves) / 2;
     int max = (WIDTH * HEIGHT + 1 - (int)P->moves) / 2;
-    
     while (min < max) {
         int med = min + (max - min) / 2;
         if (med <= 0 && min / 2 < med) med = min / 2;
         else if (med >= 0 && max / 2 > med) med = max / 2;
-        
         int r = negamax(P, med, med + 1);
-        
         if (r <= med) max = r;
         else min = r;
     }
@@ -357,14 +295,35 @@ static int solve(const Position *P) {
 static int negamax(const Position *P, int alpha, int beta) {
     node_count++;
     
-    bitboard_t possible_moves = possible_non_losing_moves(P);
-    if (possible_moves == 0) {
-        return -(WIDTH * HEIGHT - (int)P->moves) / 2;
+    // OPTIMIZATION 3: Check TT *before* logic checks
+    uint64_t k = key(P);
+    int val = tt_get(k);
+    
+    if (val) {
+        if (val > MAX_SCORE - MIN_SCORE + 1) {
+            int min = val + 2 * MIN_SCORE - MAX_SCORE - 2;
+            if (alpha < min) {
+                alpha = min;
+                if (alpha >= beta) return alpha;
+            }
+        } else {
+            int max = val + MIN_SCORE - 1;
+            if (beta > max) {
+                beta = max;
+                if (alpha >= beta) return beta;
+            }
+        }
+    }
+
+    // Check Book
+    if ((val = book_get(P))) {
+        return val + MIN_SCORE - 1;
     }
     
-    if ((int)P->moves >= WIDTH * HEIGHT - 2) {
-        return 0;
-    }
+    bitboard_t possible_moves = possible_non_losing_moves(P);
+    if (possible_moves == 0) return -(WIDTH * HEIGHT - (int)P->moves) / 2;
+    
+    if ((int)P->moves >= WIDTH * HEIGHT - 2) return 0;
     
     int min = -(WIDTH * HEIGHT - 2 - (int)P->moves) / 2;
     if (alpha < min) {
@@ -378,85 +337,48 @@ static int negamax(const Position *P, int alpha, int beta) {
         if (alpha >= beta) return beta;
     }
     
-    uint64_t k = key(P);
-    int val = tt_get(k);
-    
-    if (val) {
-        if (val > MAX_SCORE - MIN_SCORE + 1) {
-            min = val + 2 * MIN_SCORE - MAX_SCORE - 2;
-            if (alpha < min) {
-                alpha = min;
-                if (alpha >= beta) return alpha;
-            }
-        } else {
-            max = val + MIN_SCORE - 1;
-            if (beta > max) {
-                beta = max;
-                if (alpha >= beta) return beta;
-            }
-        }
-    }
-    
-    if ((val = book_get(P))) {
-        return val + MIN_SCORE - 1;
-    }
-    
     MoveSorter moves;
     ms_init(&moves);
     
     for (int i = WIDTH - 1; i >= 0; i--) {
         bitboard_t move = possible_moves & column_mask(column_order[i]);
-        if (move) {
-            ms_add(&moves, move, move_score(P, move));
-        }
+        if (move) ms_add(&moves, move, move_score(P, move));
     }
     
     bitboard_t next;
     while ((next = ms_get_next(&moves))) {
         Position P2 = *P;
         play(&P2, next);
-        
         int score = -negamax(&P2, -beta, -alpha);
-        
         if (score >= beta) {
             tt_put(k, score + MAX_SCORE - 2 * MIN_SCORE + 2);
             return score;
         }
-        if (score > alpha) {
-            alpha = score;
-        }
+        if (score > alpha) alpha = score;
     }
     
     tt_put(k, alpha - MIN_SCORE + 1);
     return alpha;
 }
 
-
 static void board_to_position(char **board, char botSym, Position *p) {
     p->current_position = 0;
     p->mask = 0;
     p->moves = 0;
-    
-    
     for (int col = 0; col < WIDTH; col++) {
         for (int row = 0; row < HEIGHT; row++) {
             if (board[row][col] != EMPTY) {
-                
                 int bit_row = (HEIGHT - 1) - row;
                 int bit_idx = bit_row + col * (HEIGHT + 1);
-                
                 p->mask |= (UINT64_C(1) << bit_idx);
-                
                 if (board[row][col] == botSym) {
                     p->current_position |= (UINT64_C(1) << bit_idx);
                 }
-                
                 p->moves++;
             }
         }
     }
 }
-
 
 void init_hard_bot(void) {
     static bool initialized = false;
@@ -473,7 +395,8 @@ void init_hard_bot(void) {
         column_order[i] = WIDTH / 2 + (1 - 2 * (i % 2)) * (i + 1) / 2;
     }
     
-    TT.keys = calloc(TT_SIZE, sizeof(uint32_t));
+    // FIX 1: Allocate 64-bit keys
+    TT.keys = calloc(TT_SIZE, sizeof(uint64_t));
     TT.values = calloc(TT_SIZE, sizeof(uint8_t));
     
     if (!TT.keys || !TT.values) {
@@ -482,7 +405,6 @@ void init_hard_bot(void) {
     }
     
     book_load("7x6.book");
-    
     initialized = true;
 }
 
@@ -492,25 +414,32 @@ int getHardMove(char **board, char botSym) {
     Position pos;
     board_to_position(board, botSym, &pos);
     
+    // Check for immediate win
     for (int col = 0; col < WIDTH; col++) {
         if (can_play(&pos, col)) {
             bitboard_t move = (pos.mask + bottom_mask_col(col)) & column_mask(col);
-            if (winning_position(&pos) & move) {
-                return col + 1; 
-            }
+            if (winning_position(&pos) & move) return col + 1; 
         }
     }
     
     int best_col = -1;
     int best_score = -99999;
     
-    for (int col = 0; col < WIDTH; col++) {
+    // OPTIMIZATION 4: Optimal root ordering + Early Exit
+    int root_order[] = {3, 2, 4, 1, 5, 0, 6};
+
+    for (int i = 0; i < WIDTH; i++) {
+        int col = root_order[i];
+        
         if (can_play(&pos, col)) {
             Position p2 = pos;
             play_col(&p2, col);
             
             node_count = 0;
             int score = -solve(&p2);
+            
+            // If we found a winning move, take it immediately
+            if (score > 0) return col + 1;
             
             if (score > best_score) {
                 best_score = score;
@@ -520,10 +449,10 @@ int getHardMove(char **board, char botSym) {
     }
     
     if (best_col == -1) {
-        for (int col = 0; col < WIDTH; col++) {
-            if (board[0][col] == EMPTY) {
-                return col + 1;
-            }
+        // If losing, pick best available column from center out
+        for (int i = 0; i < WIDTH; i++) {
+            int col = root_order[i];
+            if (board[0][col] == EMPTY) return col + 1;
         }
         return 1;
     }
